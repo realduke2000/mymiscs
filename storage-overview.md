@@ -1,5 +1,7 @@
 
-## 物理存储 HDD与SDD
+## 存储概念
+
+### 物理存储 HDD与SDD
 ||HDD|SDD|
 |:---:|:---:|:---:|
 |存储的基本原理|靠磁性物质存储数据，通过最小磁性单元磁畴磁化后的正反方向转化成电信号代表1/0，无磁状态为空|靠存储电子存储数据，隧道效应，通过加电压使得电子穿过绝缘体，困在浮栅中，无电子为1，有电子为0|
@@ -8,7 +10,7 @@
 |物理接口|SATA, SAS|M.2(SATA, NVMe/PCIe)|
 |读写语义|SCSI|SCSI/NVMe|
 
-## 存储类型
+### 存储类型
 ||块存储|文件存储|对象存储|
 |:---:|:----:|:----:|:----:|
 |数据访问|通过逻辑块地址(LBA)按块读写，上层自己组织数据|通过路径/文件名访问，由文件系统组织目录、权限、元数据|通过ID/Key访问，对象连通元数据一起存储|
@@ -18,21 +20,21 @@
 |数据结构及寻址方式|块号/偏移|文件系统的目录树+inode/元数据|Bucket+Key，底层结合哈希、索引、元数据服务实现|
 |特点|低延迟，随机读写性强，但不直接管理文件|用户友好|易扩展，适合分布式、高并发，但延时高|
 
-## IO基础
+### IO基础
 
-### IOPS
+#### IOPS
 每秒访问数，一般用4K, 8K小数据块模拟随机存储，HDD的IOPS为100 ~ 500, SDD的IOPS可以达到1K ~ 500K, 云存储采用多层内存缓存+sdd落地, IOPS可以达到更快。
 目前数据中心存储采用以太网较多，传统企业使用的SAN网络较少，主要原因是价格高，FC兼容性差，无论是以太网还是FC，网络延迟对IOPS的影响都较小。
 随机读写次数较多的，例如数据库，需要首先衡量存储设备的IOPS
 
-### 吞吐量(Throughput)
+#### 吞吐量(Throughput)
 是指每秒数据的传输量，常用MB/s, GB/s单位。大文件，例如4K视频的读写，需要首先衡量存储设备的Throughput。
 
-### 延迟(Latency)
+#### 延迟(Latency)
 存储设备的相应速度，从收到请求到返回数据的时间，Latency对IOPS的影响较大，对小文件的随机读写，影响比较大。
 HDD, 常用ms毫秒为单位, SSD，常用μs微秒为单位
 
-### 实际问题
+#### 实际问题
 Q: 假设你要为一个同时运行在线交易系统和视频点播服务的服务器选择存储，在线交易需要快速响应每笔订单，视频点播需要流畅播放高清视频，你会怎么平衡 IOPS、吞吐量和延迟？
 
 A: 在线交易系统需求是低延迟高IOPS，在线视频网站的要求是低IOPS，高吞吐量。
@@ -56,83 +58,93 @@ lvconvert --type cache-pool --cachemode writethrough storage_vg/ssd_cache_lv
 lvconvert --cache-pool storage_vg/ssd_cache_lv storage_vg/video_hdd_lv
 ```
 
-## 存储种类
+### 存储不同部署方式
 本地存储、网络存储、分布式存储
 
-### 本地存储
+#### 本地存储
+通过本机总线直连本地存储设备，延迟低、性能高，共享能力弱。
 ```
 Application
         -> VFS
-        -> File System
-           DB
-        -> Blocker Layer
+        -> File System(ext4, xfs)
+        -> Block Layer
         -> Device Driver
-        -> Local Disk
+        -> Disks
+
+注: 有些应用可绕过文件系统直接使用块设备
+Application(e.g. DB)
+        -> Block Layer
+        -> Device Driver
+        -> Disks
 ```
 
-### 网络存储
-#### 块存储
+#### 网络存储
+通过网络(FC, Ethernet)连接存储设备，主机设备与存储设备分离，便于集中管理与共享。读写延迟、性能受到网络架构影响，传统网络存储通常以纵向扩展(scale up)为主。FC SAN需要专用网络，性能高，延迟低但价格昂贵。
+##### 网络块存储
+通过FC/iSCSI/NVMe-oF等方式，把远程的存储呈现为主机上的块设备。
+主机通过NIC/HBA连接存储，需要一个主动的发现过程：触发后，主机侧的initiator发现远端的target/LUN, OS创建一个本地块存储设备(例如/dev/sdx)，应用对该设备的读写，通过initiator与远程的存储进行通信，完成真正的数据读写。这个连接存储设备的网卡，在操作系统中一直存在，也需要进行配置管理。
 ```
 Application
         -> VFS
-        -> Block layer
         -> File System
-           DB
-        -> Blocker Layer
-    ~~~ SAN/iSCSI/NVME-oF ~~~
+        -> Block Layer
+        -> SAN/iSCSI/NVME-oF initiator
+        -> NIC / HBA
+    ~~~ Network ~~~
         -> Storage Array Controller
         -> Disks
 ```
 
 
-### 文件存储
+#### 网络文件存储
+通过以太网来连接的存储服务器，通过SMB/NFS协议提供文件服务，通过挂载将文件服务导出的目录挂载在本地目录进行读写。
 ```
-Applicaiton
+Application
         -> VFS
         -> SMB/NFS Client
     ~~~~~~ Network ~~~~~~
         -> NAS Server
         -> Export/Share
-        -> File system
+        -> File System
         -> Disks
 
 ```
 
-### 分布式存储
-对象
-应用 --> 网络(HTTP) --> 分布式存储服务 --> 分布式文件系统 --> 
-#### Object对象
+#### 分布式存储
+通过软件方式，将多台机器上的存储资源组织成存储池，提供对象、块、文件等接口，具有横向扩展以及容错能力，系统复杂度较高。
+
+##### Object对象
 ```
 Application
-        -> Network(S3)
-        -> Object
-        -> Distributed File System
+        -> Network(S3/HTTP API)
+        -> Object Storage Cluster
         +--> Storage Device on Node 1
         +--> Storage Device on Node 2
         +--> Storage Device on Node 3
 ```
-#### File文件
+##### File文件
 ```
 Application
         -> VFS
-        -> SMB/NFS Client
+        -> Distributed FS Client / SMB / NFS
     ~~~~~~ Network ~~~~~~
-        -> Distributed File System
+        -> Distributed File Storage Cluster
         +--> Storage Device on Node 1
         +--> Storage Device on Node 2
         +--> Storage Device on Node 3
 ```
-#### Block块
+##### Block块
 ```
 Application
         -> VFS
-        -> Block layer
         -> File System
-           DB
-        -> Blocker Layer
+        -> Block Layer
+        -> Distributed Block Client / iSCSI / NVMe-oF Initiator
     ~~~~~~ Network ~~~~~~
-        -> Distributed File System
+        -> Distributed Block Storage Cluster / Network Protocol (iSCSI/NVMe-oF)
         +--> Storage Device on Node 1
         +--> Storage Device on Node 2
         +--> Storage Device on Node 3
 ```
+
+## 其他
